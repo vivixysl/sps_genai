@@ -1,35 +1,34 @@
-"""Loads the trained CNN once and classifies a single image."""
 import io
-from pathlib import Path
 
 import torch
+import torchvision.transforms as transforms
 from PIL import Image
-from torchvision import transforms
 
-from app.cnn_model import AssignmentCNN
+from app.cnn_model import SimpleCNN
 
-CLASSES = ["airplane", "automobile", "bird", "cat", "deer",
-           "dog", "frog", "horse", "ship", "truck"]
-WEIGHTS = Path(__file__).parent / "cnn_cifar10.pth"
+CLASSES = [
+    "airplane", "automobile", "bird", "cat", "deer",
+    "dog", "frog", "horse", "ship", "truck",
+]
 
-_transform = transforms.Compose([
-    transforms.Resize((64, 64)),
-    transforms.ToTensor(),
-    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
-])
+# Same preprocessing as in training: resize to 64x64, convert to tensor
+transform = transforms.Compose([transforms.Resize((64, 64)), transforms.ToTensor()])
 
 
 class ImageClassifier:
-    def __init__(self, weights_path: Path = WEIGHTS):
-        self.model = AssignmentCNN(num_classes=10)
-        if weights_path.exists():
-            self.model.load_state_dict(torch.load(weights_path, map_location="cpu"))
-        self.model.eval()  # inference mode
+    def __init__(self, weights_path="app/cnn_cifar10.pth"):
+        self.model = SimpleCNN()
+        self.model.load_state_dict(torch.load(weights_path, map_location="cpu"))
+        self.model.eval()  # evaluation mode
 
-    def predict(self, image_bytes: bytes) -> dict:
+    def predict(self, image_bytes):
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        x = _transform(image).unsqueeze(0)          # 1 x 3 x 64 x 64
+        x = transform(image).unsqueeze(0)  # add batch dimension: 1 x 3 x 64 x 64
         with torch.no_grad():
-            probs = torch.softmax(self.model(x), dim=1)[0]
-        idx = int(probs.argmax())
-        return {"predicted_class": CLASSES[idx], "confidence": round(float(probs[idx]), 4)}
+            outputs = self.model(x)
+            probabilities = torch.softmax(outputs, dim=1)
+            confidence, predicted = torch.max(probabilities, 1)
+        return {
+            "predicted_class": CLASSES[predicted.item()],
+            "confidence": round(confidence.item(), 4),
+        }

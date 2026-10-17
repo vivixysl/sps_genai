@@ -1,55 +1,85 @@
-"""Part 2: train AssignmentCNN on CIFAR-10 and save the weights for the API.
-
-CIFAR-10 images are 32x32, but the required architecture expects 64x64 input,
-so every image is resized to 64x64 before going into the model.
-Run from the project root:  python train_cifar10.py
-"""
 import torch
 import torch.nn as nn
+import torch.optim as optim
+import torchvision
+import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
 
-from app.cnn_model import AssignmentCNN
+from app.cnn_model import SimpleCNN
 
-MEAN, STD = (0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)
-transform = transforms.Compose([
-    transforms.Resize((64, 64)),
-    transforms.ToTensor(),
-    transforms.Normalize(MEAN, STD),
-])
+torch.manual_seed(42)
 
-train_set = datasets.CIFAR10(root="./data", train=True, download=True, transform=transform)
-test_set = datasets.CIFAR10(root="./data", train=False, download=True, transform=transform)
-train_loader = DataLoader(train_set, batch_size=64, shuffle=True)
-test_loader = DataLoader(test_set, batch_size=256)
-
-device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
-model = AssignmentCNN(num_classes=10).to(device)
-criterion = nn.CrossEntropyLoss()            # takes raw logits
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+# Check which GPU is available
+device = (
+    torch.device("mps")
+    if torch.backends.mps.is_available()
+    else torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+)
+print(f"Using device: {device}")
 
 EPOCHS = 5
+BATCH_SIZE = 32
+
+# Prepare the Data
+# CIFAR-10 images are 32x32, but the assignment's CNN takes 64x64 input,
+# so we resize every image to 64x64 before converting it to a tensor.
+transform = transforms.Compose([transforms.Resize((64, 64)), transforms.ToTensor()])
+train_dataset = torchvision.datasets.CIFAR10(
+    root="./data", train=True, download=True, transform=transform
+)
+test_dataset = torchvision.datasets.CIFAR10(
+    root="./data", train=False, download=True, transform=transform
+)
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+
+model = SimpleCNN().to(device)
+
+# Train the model
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.0005)
+
 for epoch in range(EPOCHS):
-    model.train()
     running_loss = 0.0
-    for images, labels in train_loader:
-        images, labels = images.to(device), labels.to(device)
+    running_correct, running_total = 0, 0
+    model.train()
+    for inputs, labels in train_loader:
+        inputs = inputs.to(device)
+        labels = labels.to(device)
+
         optimizer.zero_grad()
-        loss = criterion(model(images), labels)
+        outputs = model(inputs)
+        _, predicted = torch.max(outputs.data, 1)
+        loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
-        running_loss += loss.item() * images.size(0)
 
-    model.eval()
-    correct = total = 0
-    with torch.no_grad():
-        for images, labels in test_loader:
-            images, labels = images.to(device), labels.to(device)
-            preds = model(images).argmax(dim=1)
-            correct += (preds == labels).sum().item()
-            total += labels.size(0)
-    print(f"Epoch {epoch + 1}/{EPOCHS}  "
-          f"train loss {running_loss / len(train_set):.4f}  test acc {correct / total:.2%}")
+        running_correct += (predicted == labels).sum().item()
+        running_total += labels.size(0)
+        running_loss += loss.item()
 
+    print(
+        f"Epoch {epoch + 1}/{EPOCHS}  "
+        f"avg loss: {running_loss / len(train_loader):.4f}  "
+        f"avg accuracy: {running_correct / running_total:.3f}"
+    )
+print("Finished Training")
+
+# Evaluation
+test_correct = 0
+test_total = 0
+model.eval()
+with torch.no_grad():
+    for test_images, test_labels in test_loader:
+        test_images = test_images.to(device)
+        test_labels = test_labels.to(device)
+        test_outputs = model(test_images)
+        _, test_predicted = torch.max(test_outputs.data, 1)
+        test_total += test_labels.size(0)
+        test_correct += (test_predicted == test_labels).sum().item()
+test_accuracy = 100 * test_correct / test_total
+print(f"Accuracy of the network on the 10000 test images: {test_accuracy:.2f}%")
+
+# Save the trained weights so the API can load them
 torch.save(model.state_dict(), "app/cnn_cifar10.pth")
-print("Saved weights to app/cnn_cifar10.pth")
+print("Saved model weights to app/cnn_cifar10.pth")
